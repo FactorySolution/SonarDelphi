@@ -53,7 +53,6 @@ public class GrammarTest {
   }
 
   @Test
-  @Ignore
   public void test() throws Exception {
     parseFile("GrammarTest.pas");
   }
@@ -69,13 +68,16 @@ public class GrammarTest {
   }
 
   @Test
-  @Ignore
   public void parseNewGrammar() throws Exception {
     parseFile("GrammarTestNew.pas");
   }
 
   @Test
-  @Ignore
+  public void parseGrammar2020() throws Exception {
+    parseFile("GrammarTest2020.pas");
+  }
+  
+  @Test
   public void parseComplexArray() throws Exception {
     parseFile("ComplexArray.pas");
   }
@@ -132,7 +134,6 @@ public class GrammarTest {
   }
 
   @Test
-  @Ignore("https://github.com/fabriciocolombo/sonar-delphi/issues/39")
   public void parseInterfaceMethodResolutionClause() throws Exception {
     parseFile("InterfaceMethodResolutionClause.pas");
   }

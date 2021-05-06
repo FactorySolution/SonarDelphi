@@ -64,6 +64,15 @@ package org.sonar.plugins.delphi.antlr;
 **/
 }
 
+@lexer::members {
+  private boolean isControlchar() {
+    // TODO 
+    //  - check if there are actually 2 chars ahead and not an EOF
+    //  - perhaps something else than a regex match here
+    return ((char)input.LA(1) + "" + (char)input.LA(2)).matches("\\w\\W");
+  }
+}
+
 //****************************
 //section start
 //****************************
@@ -132,7 +141,6 @@ declSection                  : labelDeclSection
                              | constSection
                              | typeSection
                              | varSection
-                             | exportedProcHeading
                              | methodDecl
                              | procDecl
                              | exportsSection
@@ -166,7 +174,10 @@ varKey                       : 'var'
 // threadvar geen initializations alleen globaal
 varDeclaration               : (customAttribute)? identListFlat ':' typeDecl (varValueSpec)? (hintingDirective)* ';' -> (customAttribute)? ^(TkVariableIdents identListFlat) ^(TkVariableType typeDecl)
                              ;
-varValueSpec                 : 'absolute' ident
+inlineVarDeclaration         : 'var' ident (':' typeDecl)? ':=' expression
+                             | 'var' ident ':' typeDecl 
+                             ; 
+varValueSpec                 : 'absolute' qualifiedIdent
                              | 'absolute' constExpression
                              | '=' constExpression
                              ;
@@ -182,8 +193,8 @@ typeDecl                     : strucType
                              | stringType
                              | procedureType
                              | variantType
-                             | ('type')? typeId (genericPostfix)?
-                             | simpleType
+                             | ('type')? typeId (genericPostfix)? ('.' typeDecl)* (paranthesePostfix)?
+                             | simpleType                             
                              ;
 strucType                    : ('packed')? strucTypePart -> strucTypePart
                              ;
@@ -240,38 +251,32 @@ subRangeType                 : constExpression ('..' constExpression)?
                              ;
 enumType                     : '(' ident ('=' expression)? (',' ident ('=' expression)? )* ')'
                              ;
-typeId                       : namespacedQualifiedIdent
+typeId                       : qualifiedIdent
                              ;
 //****************************
 //section generics
 //****************************
 genericTypeIdent             : qualifiedIdent (genericDefinition)? -> qualifiedIdent    //CHANGED we don't need <Type> data, it produced empty nodes
                              ;
-genericDefinition            : simpleGenericDefinition
-                             | complexGenericDefinition
-                             | constrainedGenericDefinition
+genericDefinition           : '<' innerGeneric (';' innerGeneric)* '>'
                              ;
-simpleGenericDefinition      : '<' ident (',' ident)* '>'
+innerGeneric                 : genericTypeIdent (',' genericTypeIdent)* (':' genericConstraint (',' genericConstraint)*)?
                              ;
-complexGenericDefinition     : '<' qualifiedIdent (simpleGenericDefinition)? (',' qualifiedIdent (simpleGenericDefinition)?)* '>'
-                             ;
-constrainedGenericDefinition : '<' constrainedGeneric (';' constrainedGeneric)* '>'
-                             ;
-constrainedGeneric           : ident (':' genericConstraint (',' genericConstraint)*)?
-                             ;
-genericConstraint            : ident
+genericConstraint            : genericTypeIdent
                              | 'record'
                              | 'class'
                              | 'constructor'
                              ;
 genericPostfix               : '<' typeDecl (',' typeDecl)* '>'
                              ;
+paranthesePostfix            :	'(' intRealNum ')'	//Only used for "type AnsiString(1252)"
+                             ;
 //****************************
 //section class
 //****************************
 classDecl                    : classTypeTypeDecl
-                             | classTypeDecl -> ^(TkClass classTypeDecl)
                              | classHelperDecl -> ^(TkClass classHelperDecl)
+                             | classTypeDecl -> ^(TkClass classTypeDecl)
                              | interfaceTypeDecl -> ^(TkInterface interfaceTypeDecl)
                              | objectDecl -> ^(TkObject objectDecl)
                              | recordDecl -> ^(TkRecord recordDecl)
@@ -280,7 +285,7 @@ classDecl                    : classTypeTypeDecl
 classTypeTypeDecl            : 'class' 'of' typeId -> ^(TkClassOfType typeId)
                              ;
 classTypeDecl                : 'class' (classState)? (classParent)? (classItem)* 'end' -> 'class' ^(TkClassParents (classParent)?) (classItem)*
-                             | 'class' (classParent)? -> 'class' ^(TkClassParents (classParent)?)
+                             | 'class' (classState)? (classParent)? -> 'class' ^(TkClassParents (classParent)?) //added optional class state
                              ;
 classState                   : 'sealed'
                              | 'abstract'
@@ -300,6 +305,8 @@ classHelperDecl              : 'class' 'helper' (classParent)? 'for' typeId (cla
 classHelperItem              : visibility
                              | classMethod
                              | classProperty
+                             | constSection
+                             | typeSection
                              | ('class')? varSection
                              ;
 interfaceTypeDecl            : interfaceKey (classParent)? (interfaceGuid)? (interfaceItem)* 'end'
@@ -326,7 +333,7 @@ recordDecl                   : simpleRecord
                              ;
 simpleRecord                 : 'record' (recordField)* (recordItem)* 'end' -> 'record' (recordField)* (recordItem)*
                              ;
-variantRecord                : 'record' (recordField)* recordVariantSection 'end' -> 'record' (recordField)* recordVariantSection
+variantRecord                : 'record' (recordField)* (recordItem)* recordVariantSection 'end' -> 'record' (recordField)* (recordItem)* recordVariantSection
                              ;
 recordItem                   : visibility     //ADDED
                              | classMethod
@@ -349,6 +356,7 @@ recordVariant                : constExpression (',' constExpression)* ':' '(' (r
 recordHelperDecl             : 'record' 'helper' 'for' typeId (recordHelperItem)* 'end'
                              ;
 recordHelperItem             : visibility
+                             | constSection
                              | classMethod
                              | classProperty
                              ;
@@ -356,8 +364,10 @@ classMethod                  : (customAttribute)? ('class')? methodKey ident (ge
                              ->  (customAttribute)? ('class')? ^(methodKey ^(TkFunctionName ident) (genericDefinition)? ^(TkFunctionArgs (formalParameterSection)?) (methodDirective)*)
                              | (customAttribute)? ('class')? 'function' ident (genericDefinition)? (formalParameterSection)? ':' (customAttribute)? typeDecl ';' (methodDirective)*
                              -> (customAttribute)? ('class')? ^('function' ^(TkFunctionName ident) (genericDefinition)? ^(TkFunctionArgs (formalParameterSection)?) (customAttribute)? ^(TkFunctionReturn typeDecl) (methodDirective)*)
-                             | (customAttribute)? ('class')? 'operator' ident (genericDefinition)? (formalParameterSection)? ':' (customAttribute)? typeDecl ';'
-                             -> (customAttribute)? ('class')? ^('operator' ^(TkFunctionName ident) (genericDefinition)? ^(TkFunctionArgs (formalParameterSection)?) (customAttribute)? typeDecl )
+                             | (customAttribute)? ('class')? 'operator' ident (genericDefinition)? (formalParameterSection)? ':' (customAttribute)? typeDecl ';' (methodDirective)* 
+                             -> (customAttribute)? ('class')? ^('operator' ^(TkFunctionName ident) (genericDefinition)? ^(TkFunctionArgs (formalParameterSection)?) (customAttribute)? typeDecl (methodDirective)*)
+                             | (customAttribute)? ('class')? 'function' ident (genericDefinition)? '.' ident '=' ident ';'
+                             | (customAttribute)? ('class')? 'procedure' ident (genericDefinition)? '.' ident '=' ident ';'
                              ;
 classField                   : (customAttribute)? identList ':' typeDecl ';' (hintingDirective)*
                              -> (customAttribute)? ^(TkClassField ^(TkVariableIdents identList) ^(TkVariableType typeDecl))
@@ -377,7 +387,7 @@ classPropertySpecifier       : classPropertyReadWrite   //CHANGED removed ';'
                              | 'default' expression
                              | 'default'                // for array properties only (1 per class)
                              | 'nodefault'
-                             | IMPLEMENTS typeId
+                             | IMPLEMENTS genericTypeIdent
                              ;
 classPropertyEndSpecifier    : STORED expression ';'    //ADDED used in classProperty at end
                              | 'default' expression ';'
@@ -419,7 +429,7 @@ methodKey                    : 'procedure'
                              | 'constructor'
                              | 'destructor'
                              ;
-methodName                   : ident (genericDefinition)? ('.' ident (genericDefinition)?)? '.' ident (genericDefinition)?
+methodName                   : ident (genericDefinition)? ('.' ident (genericDefinition)?)*
                              ;
 procDecl                     : procDeclHeading ';' (functionDirective)* (procBody)? -> procDeclHeading (procBody)?    //CHANGED
                              ;
@@ -452,9 +462,10 @@ customAttribute              : customAttributeList
                              ;
 customAttributeList          : (customAttributeDecl)*
                              ;
-customAttributeDecl          : '[' namespacedQualifiedIdent ('(' (expressionList)? ')')? ']'  -> ^(TkCustomAttribute '[' namespacedQualifiedIdent ('(' (expressionList)? ')')? ']')
+customAttributeDecl          : '[' customAttributeIdent ('(' (expressionList)? ')')? ']'  -> ^(TkCustomAttribute '[' customAttributeIdent ('(' (expressionList)? ')')? ']')
                              ;
-
+customAttributeIdent         : qualifiedIdent (':' qualifiedIdent)?
+                             ;
 //****************************
 //section expression
 //****************************
@@ -472,27 +483,30 @@ factor                       : '@' factor
                              | '+' factor
                              | '-' factor
                              | '^' ident           // geeft volgnummer van letter
-                             | intNum
-                             | realNum
-                             | TkAsmHexNum          // Alleen in asm statement
+                             | intRealNum
                              | 'true'
                              | 'false'
                              | 'nil'
+                             | 'nil^'                                             // Used to pass nil as var paramter value
+                             | '(' expression ')' designator
                              | '(' expression ')' ('^')? ('.' expression)?        //CHANGED, added  ('^')? ('.' qualifiedIdent)?
-                             | stringFactor
+                             | stringFactor ('.' simpleExpression)?
                              | setSection
                              | designator
                              | typeId '(' expression ')'
                              ;
-stringFactor                 : ControlString (QuotedString ControlString)* (QuotedString)?
-                             | QuotedString (ControlString QuotedString)* (ControlString)?
+stringFactor                 : (controlString) (QuotedString (controlString))* (QuotedString)?
+                             | QuotedString ((controlString) QuotedString)* (controlString)?
+                             ;
+controlString                : ControlChar (ControlChar)*
                              ;
 setSection                   : '[' (expression ((',' | '..') expression)*)? ']'
                              ;
 
-designator                   : ('inherited')? ( (namespacedQualifiedIdent | typeId) )? (designatorItem)*
+designator                   : ('Inherited')? ('inherited')? ( (qualifiedIdent | typeId) )? (designatorItem)*
                              ;
 designatorItem               : '^'
+                             | '^^'
                              | ('.' | '@') ident              //CHANGED added '@'
                              | ('<' genericTypeIdent (',' genericTypeIdent)* '>')       //ADDED for proc<sth, sth>.foo;
                              | '[' expressionList ']'
@@ -506,15 +520,23 @@ colonConstruct               : ':' expression (':' expression)?
 operator                     : '+'
                              | '-'
                              | 'or'
+                             | 'OR'
                              | 'xor'
+                             | 'XOR'
                              | '*'
                              | '/'
                              | 'div'
+                             | 'DIV'
                              | 'mod'
+                             | 'MOD'
                              | 'and'
+                             | 'AND'
                              | 'shl'
+                             | 'SHL'
                              | 'shr'
+                             | 'SHR'
                              | 'as'
+                             | 'AS'
                              ;
 relOp                        : '<'
                              | '>'
@@ -554,14 +576,15 @@ repeatStatement              : 'repeat' (statementList)? 'until' expression
                              ;
 whileStatement               : 'while' expression 'do' statement
                              ;
-forStatement                 : 'for' designator ':=' expression 'to' expression 'do' statement
-                             | 'for' designator ':=' expression 'downto' expression 'do' statement
-                             | 'for' designator 'in' expression 'do' statement
+forStatement                 : 'for' ('var')? designator ':=' expression 'to' expression 'do' statement
+                             | 'for' ('var')? designator ':=' expression 'downto' expression 'do' statement
+                             | 'for' ('var')? designator 'in' expression 'do' statement
                              ;
-withStatement                : 'with' withItem 'do' statement
+withStatement                : 'with' withItemList 'do' statement
                              ;
-withItem                     : designator 'as' designator       //ADDED
-                             | designator (',' designator)*
+withItemList                 : withItem (',' withItem)*
+                             ;
+withItem                     : designator ('as' designator)?
                              ;
 compoundStatement            : 'begin' (statementList)? 'end' -> ^('begin' (statementList)? 'end')
                              ;
@@ -570,6 +593,7 @@ statementList                : (statement)? (';' (statement)?)*
 simpleStatement              : designator ':=' expression
                              | designator // call
                              | gotoStatement
+                             | inlineVarDeclaration
                              ;
 gotoStatement                : 'goto' label
                              | 'exit' ('(' expression ')')?
@@ -580,10 +604,10 @@ gotoStatement                : 'goto' label
 //section constExpression
 //****************************
 constExpression              : '(' recordConstExpression (';' recordConstExpression)* ')' //CHANGED reversed order
-                             | '(' constExpression (',' constExpression)* ')'
+                             | '(' constExpression (',' constExpression)* ')' (constExpression)? //matches array inititialization and expressions such as (1 + 2); last constExpression matches (1 * 2) + 3
                              | expression
                              ;
-recordConstExpression        : ident ':' constExpression
+recordConstExpression        : ident ':' constExpression (';')?
                              ;
 //****************************
 //section exceptionStatement
@@ -620,6 +644,7 @@ methodDirective              : reintroduceDirective         // 1
                              | hintingDirective ';'         // 4 (niet abstract)
                              | oldCallConventionDirective   // 1
                              | dispIDDirective
+                             | externalDirective
                              ;
 functionDirective            : overloadDirective          // 1
                              | inlineDirective            // 1
@@ -627,9 +652,10 @@ functionDirective            : overloadDirective          // 1
                              | oldCallConventionDirective // 1
                              | hintingDirective ';'       // 1
                              | (callConventionNoSemi)? externalDirective          // 1
+                             | externalDirective
                              | 'unsafe' ';'               // 1 .net?
                              ;
-reintroduceDirective         : 'reintroduce' ';'
+reintroduceDirective         : 'reintroduce' (';')?
                              ;
 overloadDirective            : 'overload' (';')?    //CHANGE ; not needed
                              ;
@@ -670,7 +696,7 @@ hintingDirective             : 'deprecated' (stringFactor)?
                              ;
 externalDirective            : 'varargs' ';'   // alleen bij external cdecl
                              | 'external' ';'
-                             | 'external' constExpression (externalSpecifier)* ';' // expression : dll name
+                             | 'external' constExpression (externalSpecifier)* ('delayed')? ';' // expression : dll name
                              ;
 externalSpecifier            : 'name' constExpression
                              | 'index' constExpression   // specific to a platform
@@ -681,12 +707,28 @@ dispIDDirective              : 'dispid' expression ';'
 ////section general
 //****************************
 ident                        : TkIdentifier
-                             | '&' TkIdentifier
+                             | '&' TkIdentifier -> TkIdentifier
+                             | '&' keywordsAsIdentifier -> keywordsAsIdentifier
                              | usedKeywordsAsNames
                              ;
-usedKeywordsAsNames          : (NAME | READONLY | ADD | AT | MESSAGE | POINTER | INDEX | DEFAULT | STRING | CONTINUE)
+usedKeywordsAsNames          : (NAME | READONLY | ADD | DISPID | AT | IN | MESSAGE | POINTER | INDEX | DEFAULT | STRING | CONTINUE)
                              | (READ | WRITE | REGISTER | VARIANT | OPERATOR | REMOVE | LOCAL | REFERENCE | CONTAINS | FINAL)
-                             | (BREAK | EXIT | STRICT | OUT | OBJECT | EXPORT | ANSISTRING | IMPLEMENTS | STORED)
+                             | (BREAK | EXIT | STRICT | OUT | OBJECT | EXPORT | ANSISTRING | IMPLEMENTS | STORED | HELPER )
+                             | (UNSAFE | STATIC | DQ | DW | VARARGS | VARIANT | VIRTUAL | WRITE | WRITEONLY | FALSE | TRUE)
+                             ;
+keywordsAsIdentifier         : (ABSOLUTE | ABSTRACT | ADD | AND | ANSISTRING | ARRAY | AS | ASM | ASSEMBLER | ASSEMBLY)
+                             | (AT | AUTOMATED | BEGIN | BREAK | CASE | CDECL | CLASS | CONST | CONSTRUCTOR | CONTAINS)
+                             | (CONTINUE | DEFAULT | DEPRECATED | DESTRUCTOR | DISPID | DISPINTERFACE | DIV | DO | DOWNTO)
+                             | (DQ | DW | DYNAMIC | ELSE | END | EXCEPT | EXIT | EXPERIMENTAL | EXPORT | EXPORTS | EXTERNAL)
+                             | (FAR | FILE | FINAL | FINALIZATION | FINALLY | FOR | FORWARD | FUNCTION | GOTO | HELPER | IF)
+                             | (IMPLEMENTATION | IMPLEMENTS | IN | INDEX | INHERITED | INITIALIZATION | INLINE | INTERFACE)
+                             | (IS | LABEL | LIBRARY | LOCAL | MESSAGE | MOD | NAME | NEAR | NIL | NODEFAULT | NOT | OBJECT)
+                             | (OF | ON | OPERATOR | OR | OUT | OVERLOAD | OVERRIDE | PACKAGE | PACKED | PASCAL | PLATFORM)
+                             | (POINTER | PRIVATE | PROCEDURE | PROGRAM | PROPERTY | PROTECTED | PUBLIC | PUBLISHED | RAISE)
+                             | (READ | READONLY | RECORD | REFERENCE | REGISTER | REINTRODUCE | REMOVE | REPEAT | REQUIRES)
+                             | (RESIDENT | RESOURCESTRING | SAFECALL | SEALED | SET | SHL | SHR | STATIC | STDCALL | STORED)
+                             | (STRICT | STRING | THEN | THREADVAR | TO | TRY | TYPE | UNIT | UNSAFE | UNTIL | USES | VAR)
+                             | (VARARGS | VARIANT | VIRTUAL | WHILE | WITH | WRITE | WRITEONLY | XOR | FALSE | TRUE)
                              ;
 identList                    : ident (',' ident)* -> ^(ident (ident)*)
                              ;
@@ -697,12 +739,11 @@ label                        : TkIdentifier
                              | TkHexNum
                              | usedKeywordsAsNames
                              ;
+intRealNum                   : TkRealNum
+                             | intNum
+                             ;
 intNum                       : TkIntNum
                              | TkHexNum
-                             ;
-realNum                      : TkRealNum
-                             ;
-namespacedQualifiedIdent     : (namespaceName '.')? qualifiedIdent
                              ;
 namespaceName                : ident ('.' ident)*
                              ;
@@ -732,6 +773,7 @@ CONSTRUCTOR       : 'constructor'    ;
 CONTAINS          : 'contains'       ;
 CONTINUE          : 'continue'       ;
 DEFAULT           : 'default'        ;
+DELAYED           : 'delayed'        ;		 
 DEPRECATED        : 'deprecated'     ;
 DESTRUCTOR        : 'destructor'     ;
 DISPID            : 'dispid'         ;
@@ -922,22 +964,17 @@ TkIdentifier            : (Alpha | '_') (Alpha | Digit | '_')*
                         ;
 TkIntNum                : Digitseq
                         ;
-TkRealNum               : Digitseq ('.' Digitseq)? (('e'|'E') ('+'|'-')? Digitseq)?  //CHANGED
+TkRealNum               : Digitseq ( ((DOT Digitseq)? (('e'|'E') ('+'|'-')? Digitseq)?) => (DOT Digitseq)? (('e'|'E') ('+'|'-')? Digitseq)? | () { $type = TkIntNum; } )
                         ;
 TkHexNum                : '$' Hexdigitseq
                         ;
-TkAsmHexNum             : Hexdigitseq ('h'|'H')
-                        ;
-TkAsmHexLabel           : Hexdigitseq ':'
+ControlChar             : '^' ( {isControlchar()}?=> Alpha
+                            | {$type=POINTER2;}
+                            )
+                        | '#' Digitseq
+                        | '#' '$' Hexdigitseq
                         ;
 QuotedString            : '\'' ('\'\'' | ~('\''))* '\''   //taken from PASCAL grammar
-                        ;
-ControlString           : Controlchar (Controlchar)*
-                        ;
-
-fragment
-Controlchar             : '#' Digitseq
-                        | '#' '$' Hexdigitseq
                         ;
 fragment
 Alpha                   : 'a'..'z'
